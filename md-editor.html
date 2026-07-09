@@ -122,7 +122,6 @@
     overflow-y: auto;
     padding: 24px 28px;
     background: var(--paper);
-    border-left: 1px solid var(--line);
     display: none;
     line-height: 1.75;
     font-size: 14.5px;
@@ -198,7 +197,6 @@
       max-width: 300px;
     }
     aside.open { transform: translateX(0); }
-    #preview { display: none !important; }
     header h1 { display: none; }
   }
   @media (prefers-reduced-motion: reduce) {
@@ -378,7 +376,7 @@ async function openFile(f) {
     document.querySelectorAll("#fileList li").forEach(li =>
       li.classList.toggle("active", li.dataset.id === f.id));
     $("sidebar").classList.remove("open");
-    editor.focus();
+    if (editor.style.display !== "none") editor.focus();
   } catch (e) {
     if (e.message !== "token expired") { console.error(e); toast("파일을 열지 못했습니다", "err"); }
   }
@@ -446,10 +444,18 @@ editor.addEventListener("input", () => { setDirty(true); updateCount(); refreshP
 
 $("previewBtn").onclick = () => {
   const p = $("preview");
-  const showing = p.style.display === "block";
-  p.style.display = showing ? "none" : "block";
-  $("previewBtn").textContent = showing ? "미리보기" : "미리보기 닫기";
-  refreshPreview();
+  const showingPreview = p.style.display === "block";
+  if (showingPreview) {        // 미리보기 → 편집 모드
+    p.style.display = "none";
+    editor.style.display = "block";
+    $("previewBtn").textContent = "미리보기";
+    editor.focus();
+  } else {                     // 편집 → 미리보기 모드
+    editor.style.display = "none";
+    p.style.display = "block";
+    $("previewBtn").textContent = "편집";
+    refreshPreview();
+  }
 };
 
 $("saveBtn").onclick = saveFile;
