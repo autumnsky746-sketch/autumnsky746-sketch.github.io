@@ -8,15 +8,15 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.0/marked.min.js"></script>
 <style>
   :root {
-    --ink: #1b2733;
-    --ink-soft: #5b6b7a;
-    --paper: #f4f6f8;
-    --panel: #ffffff;
-    --line: #dde3e9;
-    --accent: #1a73e8;
-    --accent-soft: #e8f0fe;
-    --danger: #c5221f;
-    --ok: #188038;
+    --ink: #e6e9ec;
+    --ink-soft: #97a3af;
+    --paper: #0e1114;
+    --panel: #181d23;
+    --line: #2b333c;
+    --accent: #5b9dff;
+    --accent-soft: #1d2b3f;
+    --danger: #ff6b66;
+    --ok: #4cc06a;
     --mono: ui-monospace, "Cascadia Code", "D2Coding", Consolas, monospace;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -62,8 +62,8 @@
   }
   .btn:hover { background: var(--paper); }
   .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-  .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .btn-primary:hover { background: #1765cc; }
+  .btn-primary { background: var(--accent); border-color: var(--accent); color: #0e1114; font-weight: 600; }
+  .btn-primary:hover { background: #7cb0ff; }
   .btn:disabled { opacity: 0.45; cursor: default; }
 
   /* ── 본문 레이아웃 ────────────────────── */
@@ -89,6 +89,9 @@
     border: 1px solid var(--line);
     border-radius: 6px;
     font-size: 13px;
+    background: var(--paper);
+    color: var(--ink);
+    min-width: 0;
   }
   #searchBox:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   #fileList { flex: 1; overflow-y: auto; list-style: none; }
@@ -131,7 +134,7 @@
   #preview h2 { font-size: 1.25em; }
   #preview p, #preview ul, #preview ol { margin-bottom: 0.8em; }
   #preview ul, #preview ol { padding-left: 1.5em; }
-  #preview code { background: #e8ecf0; padding: 1px 5px; border-radius: 4px; font-family: var(--mono); font-size: 0.9em; }
+  #preview code { background: #262e37; padding: 1px 5px; border-radius: 4px; font-family: var(--mono); font-size: 0.9em; }
   #preview pre { background: #1b2733; color: #e8ecf0; padding: 14px; border-radius: 8px; overflow-x: auto; margin-bottom: 0.8em; }
   #preview pre code { background: none; color: inherit; padding: 0; }
   #preview blockquote { border-left: 4px solid var(--accent); padding-left: 12px; color: var(--ink-soft); margin-bottom: 0.8em; }
@@ -168,7 +171,7 @@
     bottom: 48px;
     left: 50%;
     transform: translateX(-50%);
-    background: var(--ink);
+    background: #313a45;
     color: #fff;
     padding: 10px 20px;
     border-radius: 8px;
@@ -179,8 +182,8 @@
     z-index: 99;
   }
   #toast.show { opacity: 1; }
-  #toast.ok { background: var(--ok); }
-  #toast.err { background: var(--danger); }
+  #toast.ok { background: #1e6b3a; }
+  #toast.err { background: #92322e; }
 
   /* ── 모바일 ──────────────────────────── */
   #sideToggle { display: none; }
@@ -289,7 +292,8 @@ function onToken(resp) {
   $("searchBox").disabled = false;
   $("newBtn").disabled = false;
   $("statusMsg").textContent = "로그인됨";
-  loadFileList();
+  folderStack = [{ id: "root", name: "내 드라이브" }];
+  loadFolder();
 }
 
 function login() { tokenClient.requestAccessToken({ prompt: "" }); }
@@ -298,7 +302,7 @@ function logout() {
   if (dirty && !confirm("저장하지 않은 변경사항이 있습니다. 로그아웃할까요?")) return;
   if (accessToken) google.accounts.oauth2.revoke(accessToken, () => {});
   accessToken = null; currentFile = null; setDirty(false);
-  allFiles = []; renderList([]);
+  allFiles = []; folderStack = [{ id: "root", name: "내 드라이브" }]; renderList([], true);
   editor.value = ""; editor.style.display = "none";
   $("preview").style.display = "none";
   $("loginScreen").style.display = "flex";
@@ -326,35 +330,74 @@ async function api(url, opts = {}) {
   return r;
 }
 
-/* ── 파일 목록 ──────────────────────────── */
-async function loadFileList() {
-  $("statusMsg").textContent = "파일 목록 불러오는 중…";
+/* ── 폴더 탐색 ──────────────────────────── */
+let folderStack = [{ id: "root", name: "내 드라이브" }];
+
+function curFolder() { return folderStack[folderStack.length - 1]; }
+
+async function loadFolder() {
+  $("statusMsg").textContent = "폴더 여는 중…";
+  $("searchBox").value = "";
   try {
-    const q = encodeURIComponent("name contains '.md' and trashed = false");
-    const fields = encodeURIComponent("files(id,name,modifiedTime)");
-    const r = await api(`${DRIVE}/files?q=${q}&fields=${fields}&pageSize=200&orderBy=modifiedTime desc&key=${API_KEY}`);
+    const q = encodeURIComponent(
+      `'${curFolder().id}' in parents and trashed = false and ` +
+      `(mimeType = 'application/vnd.google-apps.folder' or name contains '.md')`);
+    const fields = encodeURIComponent("files(id,name,mimeType,modifiedTime)");
+    const r = await api(`${DRIVE}/files?q=${q}&fields=${fields}&pageSize=300&orderBy=folder,name&key=${API_KEY}`);
     const data = await r.json();
-    allFiles = (data.files || []).filter(f => f.name.toLowerCase().endsWith(".md"));
-    renderList(allFiles);
-    $("statusMsg").textContent = `md 파일 ${allFiles.length}개`;
+    allFiles = (data.files || []).filter(f =>
+      f.mimeType === "application/vnd.google-apps.folder" || f.name.toLowerCase().endsWith(".md"));
+    renderList(allFiles, true);
+    const nFiles = allFiles.filter(f => f.mimeType !== "application/vnd.google-apps.folder").length;
+    $("statusMsg").textContent = `${curFolder().name} — md 파일 ${nFiles}개`;
   } catch (e) {
-    if (e.message !== "token expired") { console.error(e); toast("목록을 불러오지 못했습니다", "err"); }
+    if (e.message !== "token expired") { console.error(e); toast("폴더를 열지 못했습니다", "err"); }
   }
 }
 
-function renderList(files) {
+async function searchAll(kw) {
+  $("statusMsg").textContent = "검색 중…";
+  try {
+    const safe = kw.replace(/['\\]/g, "");
+    const q = encodeURIComponent(`name contains '${safe}' and name contains '.md' and trashed = false`);
+    const fields = encodeURIComponent("files(id,name,mimeType,modifiedTime)");
+    const r = await api(`${DRIVE}/files?q=${q}&fields=${fields}&pageSize=100&orderBy=modifiedTime desc&key=${API_KEY}`);
+    const data = await r.json();
+    const found = (data.files || []).filter(f => f.name.toLowerCase().endsWith(".md"));
+    renderList(found, false);
+    $("statusMsg").textContent = `전체 검색: ${found.length}개`;
+  } catch (e) {
+    if (e.message !== "token expired") { console.error(e); toast("검색에 실패했습니다", "err"); }
+  }
+}
+
+function renderList(items, folderMode) {
   const ul = $("fileList");
   ul.innerHTML = "";
-  $("sideEmpty").style.display = files.length ? "none" : "block";
-  if (!files.length && accessToken) $("sideEmpty").innerHTML = "표시할 .md 파일이 없습니다.<br>＋ 버튼으로 새로 만들 수 있습니다.";
-  for (const f of files) {
+
+  // 상위 폴더로 가기
+  if (folderMode && folderStack.length > 1) {
+    const up = document.createElement("li");
+    up.innerHTML = `<div class="fname">⬅ 상위 폴더</div><div class="fdate"></div>`;
+    up.querySelector(".fdate").textContent = folderStack[folderStack.length - 2].name;
+    up.onclick = () => { folderStack.pop(); loadFolder(); };
+    ul.appendChild(up);
+  }
+
+  $("sideEmpty").style.display = items.length || folderStack.length > 1 ? "none" : "block";
+  if (!items.length && accessToken) $("sideEmpty").innerHTML = "여기엔 폴더나 .md 파일이 없습니다.<br>＋ 버튼으로 새로 만들 수 있습니다.";
+
+  for (const f of items) {
+    const isFolder = f.mimeType === "application/vnd.google-apps.folder";
     const li = document.createElement("li");
     li.dataset.id = f.id;
-    if (currentFile && f.id === currentFile.id) li.classList.add("active");
-    const d = new Date(f.modifiedTime);
-    li.innerHTML = `<div class="fname"></div><div class="fdate">${d.toLocaleString("ko-KR")}</div>`;
-    li.querySelector(".fname").textContent = f.name;
-    li.onclick = () => openFile(f);
+    if (!isFolder && currentFile && f.id === currentFile.id) li.classList.add("active");
+    li.innerHTML = `<div class="fname"></div><div class="fdate"></div>`;
+    li.querySelector(".fname").textContent = (isFolder ? "📁 " : "📄 ") + f.name;
+    li.querySelector(".fdate").textContent = isFolder ? "폴더" : new Date(f.modifiedTime).toLocaleString("ko-KR");
+    li.onclick = isFolder
+      ? () => { folderStack.push({ id: f.id, name: f.name }); loadFolder(); }
+      : () => openFile(f);
     ul.appendChild(li);
   }
 }
@@ -403,10 +446,10 @@ async function saveFile() {
 }
 
 async function newFile() {
-  let name = prompt("새 파일 이름 (예: 메모.md)");
+  let name = prompt(`새 파일 이름 (현재 폴더: ${curFolder().name})`);
   if (!name) return;
   if (!name.toLowerCase().endsWith(".md")) name += ".md";
-  const meta = { name, mimeType: "text/markdown" };
+  const meta = { name, mimeType: "text/markdown", parents: [curFolder().id] };
   const boundary = "-------md" + Date.now();
   const body =
     `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` +
@@ -421,7 +464,7 @@ async function newFile() {
       body,
     });
     toast("새 파일을 만들었습니다", "ok");
-    await loadFileList();
+    await loadFolder();
   } catch (e) {
     if (e.message !== "token expired") { console.error(e); toast("파일 생성 실패", "err"); }
   }
@@ -464,9 +507,14 @@ $("authBtn").onclick = () => accessToken ? logout() : login();
 $("loginBigBtn").onclick = login;
 $("sideToggle").onclick = () => $("sidebar").classList.toggle("open");
 
+let searchTimer = null;
 $("searchBox").addEventListener("input", e => {
-  const kw = e.target.value.trim().toLowerCase();
-  renderList(kw ? allFiles.filter(f => f.name.toLowerCase().includes(kw)) : allFiles);
+  clearTimeout(searchTimer);
+  const kw = e.target.value.trim();
+  searchTimer = setTimeout(() => {
+    if (!kw) loadFolder();
+    else searchAll(kw);
+  }, 400);
 });
 
 document.addEventListener("keydown", e => {
