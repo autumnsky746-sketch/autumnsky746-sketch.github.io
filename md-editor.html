@@ -108,6 +108,13 @@
   .side-empty { padding: 20px 14px; color: var(--ink-soft); font-size: 13px; text-align: center; }
 
   .workspace { flex: 1; display: flex; min-width: 0; }
+  #docArea { flex: 1; display: none; flex-direction: column; min-width: 0; background: var(--panel); }
+  #docTitle { font-size: 24px; font-weight: 700; padding: 20px 24px 2px; letter-spacing: -0.3px; }
+  #docTitle:empty { display: none; }
+  #panes { flex: 1; display: flex; min-height: 0; min-width: 0; }
+  @media (min-width: 900px) {
+    #preview { border-left: 1px solid var(--line); }
+  }
   #editor {
     flex: 1;
     border: none;
@@ -225,6 +232,7 @@
   <span id="dirtyDot" title="저장되지 않은 변경사항">●</span>
   <button class="btn" id="previewBtn" disabled>미리보기</button>
   <button class="btn btn-primary" id="saveBtn" disabled>저장</button>
+  <button class="btn" id="delBtn" disabled>삭제</button>
   <button class="btn" id="authBtn">로그인</button>
 </header>
 
@@ -246,8 +254,13 @@
       <p>구글 계정으로 로그인하면 드라이브에 있는 .md 파일을 열고, 편집하고, 바로 저장할 수 있습니다.</p>
       <button class="btn btn-primary" id="loginBigBtn">Google 계정으로 로그인</button>
     </div>
-    <textarea id="editor" style="display:none" spellcheck="false" placeholder="파일을 선택하면 여기서 편집합니다"></textarea>
-    <div id="preview"></div>
+    <div id="docArea">
+      <div id="docTitle"></div>
+      <div id="panes">
+        <textarea id="editor" spellcheck="false" placeholder="파일을 선택하면 여기서 편집합니다"></textarea>
+        <div id="preview"></div>
+      </div>
+    </div>
   </div>
 </main>
 
@@ -298,7 +311,8 @@ function onToken(resp) {
   accessToken = resp.access_token;
   $("authBtn").textContent = "로그아웃";
   $("loginScreen").style.display = "none";
-  editor.style.display = "block";
+  $("docArea").style.display = "flex";
+  applyLayout();
   $("searchBox").disabled = false;
   $("newBtn").disabled = false;
   $("statusMsg").textContent = "로그인됨";
@@ -319,11 +333,13 @@ function logout() {
   renderList([], true);
   editor.value = ""; editor.style.display = "none";
   $("preview").style.display = "none";
+  $("docArea").style.display = "none";
+  $("docTitle").textContent = "";
   $("loginScreen").style.display = "flex";
   $("authBtn").textContent = "로그인";
   $("fileTitle").textContent = "파일을 선택하세요";
   $("searchBox").disabled = true; $("newBtn").disabled = true;
-  $("saveBtn").disabled = true; $("previewBtn").disabled = true;
+  $("saveBtn").disabled = true; $("previewBtn").disabled = true; $("delBtn").disabled = true;
   $("sideEmpty").style.display = "block";
   $("statusMsg").textContent = "로그아웃 상태";
   $("charCount").textContent = "";
@@ -476,14 +492,17 @@ async function openFile(f) {
     currentFile = f;
     setDirty(false);
     $("fileTitle").textContent = f.name;
+    $("docTitle").textContent = f.name.replace(/\.md$/i, "");
     $("saveBtn").disabled = false;
     $("previewBtn").disabled = false;
+    $("delBtn").disabled = false;
     $("statusMsg").textContent = f.name + " 열림";
     updateCount();
     document.querySelectorAll("#fileList li").forEach(li =>
       li.classList.toggle("active", li.dataset.id === f.id));
     setSidebar(false);
-    setMode("preview");
+    if (isWide()) refreshPreview();
+    else setMode("preview");
   } catch (e) {
     if (e.message !== "token expired") { console.error(e); toast("파일을 열지 못했습니다", "err"); }
   }
@@ -550,7 +569,12 @@ function refreshPreview() {
 
 editor.addEventListener("input", () => { setDirty(true); updateCount(); refreshPreview(); });
 
-function setMode(mode) {          // "edit" | "preview"
+const wideMq = window.matchMedia("(min-width: 900px)");
+const isWide = () => wideMq.matches;
+let narrowMode = "edit";          // 좁은 화면에서의 현재 모드
+
+function setMode(mode) {          // "edit" | "preview" (좁은 화면 전용)
+  narrowMode = mode;
   const p = $("preview");
   if (mode === "preview") {
     editor.style.display = "none";
@@ -564,9 +588,48 @@ function setMode(mode) {          // "edit" | "preview"
     editor.focus();
   }
 }
+
+function applyLayout() {
+  const p = $("preview");
+  if (isWide()) {                 // 넓은 화면: 나란히 + 실시간
+    editor.style.display = "block";
+    p.style.display = "block";
+    $("previewBtn").style.display = "none";
+    refreshPreview();
+  } else {                        // 좁은 화면: 버튼 전환
+    $("previewBtn").style.display = "";
+    setMode(narrowMode);
+  }
+}
+wideMq.addEventListener("change", () => { if (accessToken) applyLayout(); });
+
 $("previewBtn").onclick = () =>
   setMode($("preview").style.display === "block" ? "edit" : "preview");
 
+async function deleteFile() {
+  if (!currentFile) return;
+  if (!confirm(`"${currentFile.name}" 파일을 휴지통으로 보낼까요?`)) return;
+  $("delBtn").disabled = true;
+  try {
+    await api(`${DRIVE}/files/${currentFile.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trashed: true }),
+    });
+    toast("휴지통으로 이동했습니다 (드라이브에서 복구 가능)", "ok");
+    currentFile = null; editor.value = ""; setDirty(false); updateCount();
+    $("docTitle").textContent = "";
+    $("fileTitle").textContent = "파일을 선택하세요";
+    $("saveBtn").disabled = true; $("previewBtn").disabled = true;
+    narrowMode = "edit"; applyLayout();
+    await buildIndex(); loadFolder();
+  } catch (e) {
+    if (e.message !== "token expired") { console.error(e); toast("삭제에 실패했습니다", "err"); }
+    $("delBtn").disabled = !currentFile;
+  }
+}
+
+$("delBtn").onclick = deleteFile;
 $("saveBtn").onclick = saveFile;
 $("newBtn").onclick = newFile;
 $("authBtn").onclick = () => accessToken ? logout() : login();
