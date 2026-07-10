@@ -112,9 +112,7 @@
   #docTitle { font-size: 24px; font-weight: 700; padding: 20px 24px 2px; letter-spacing: -0.3px; }
   #docTitle:empty { display: none; }
   #panes { flex: 1; display: flex; min-height: 0; min-width: 0; }
-  @media (min-width: 900px) {
-    #preview { border-left: 1px solid var(--line); }
-  }
+  #preview { touch-action: manipulation; }
   #editor {
     flex: 1;
     border: none;
@@ -312,7 +310,7 @@ function onToken(resp) {
   $("authBtn").textContent = "로그아웃";
   $("loginScreen").style.display = "none";
   $("docArea").style.display = "flex";
-  applyLayout();
+  setMode("edit");
   $("searchBox").disabled = false;
   $("newBtn").disabled = false;
   $("statusMsg").textContent = "로그인됨";
@@ -501,8 +499,7 @@ async function openFile(f) {
     document.querySelectorAll("#fileList li").forEach(li =>
       li.classList.toggle("active", li.dataset.id === f.id));
     setSidebar(false);
-    if (isWide()) refreshPreview();
-    else setMode("preview");
+    setMode("preview");
   } catch (e) {
     if (e.message !== "token expired") { console.error(e); toast("파일을 열지 못했습니다", "err"); }
   }
@@ -569,12 +566,7 @@ function refreshPreview() {
 
 editor.addEventListener("input", () => { setDirty(true); updateCount(); refreshPreview(); });
 
-const wideMq = window.matchMedia("(min-width: 900px)");
-const isWide = () => wideMq.matches;
-let narrowMode = "edit";          // 좁은 화면에서의 현재 모드
-
-function setMode(mode) {          // "edit" | "preview" (좁은 화면 전용)
-  narrowMode = mode;
+function setMode(mode) {          // "edit" | "preview"
   const p = $("preview");
   if (mode === "preview") {
     editor.style.display = "none";
@@ -589,22 +581,11 @@ function setMode(mode) {          // "edit" | "preview" (좁은 화면 전용)
   }
 }
 
-function applyLayout() {
-  const p = $("preview");
-  if (isWide()) {                 // 넓은 화면: 나란히 + 실시간
-    editor.style.display = "block";
-    p.style.display = "block";
-    $("previewBtn").style.display = "none";
-    refreshPreview();
-  } else {                        // 좁은 화면: 버튼 전환
-    $("previewBtn").style.display = "";
-    setMode(narrowMode);
-  }
-}
-wideMq.addEventListener("change", () => { if (accessToken) applyLayout(); });
-
 $("previewBtn").onclick = () =>
   setMode($("preview").style.display === "block" ? "edit" : "preview");
+
+// 미리보기 더블클릭(더블탭) → 바로 편집 모드
+$("preview").addEventListener("dblclick", () => setMode("edit"));
 
 async function deleteFile() {
   if (!currentFile) return;
@@ -621,7 +602,7 @@ async function deleteFile() {
     $("docTitle").textContent = "";
     $("fileTitle").textContent = "파일을 선택하세요";
     $("saveBtn").disabled = true; $("previewBtn").disabled = true;
-    narrowMode = "edit"; applyLayout();
+    setMode("edit");
     await buildIndex(); loadFolder();
   } catch (e) {
     if (e.message !== "token expired") { console.error(e); toast("삭제에 실패했습니다", "err"); }
