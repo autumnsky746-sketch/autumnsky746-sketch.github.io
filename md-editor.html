@@ -544,7 +544,8 @@ function updateCount() {
 }
 function refreshPreview() {
   const p = $("preview");
-  if (p.style.display !== "none" && window.marked) p.innerHTML = marked.parse(editor.value);
+  if (p.style.display !== "none" && window.marked)
+    p.innerHTML = marked.parse(editor.value, { breaks: true, gfm: true });
 }
 
 editor.addEventListener("input", () => { setDirty(true); updateCount(); refreshPreview(); });
