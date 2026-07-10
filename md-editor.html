@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Markdown editor</title>
+<title>📄 마크다운 편집기</title>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.0/marked.min.js"></script>
 <style>
@@ -103,7 +103,7 @@
   }
   #fileList li:hover { background: var(--paper); }
   #fileList li.active { background: var(--accent-soft); border-left: 3px solid var(--accent); padding-left: 11px; }
-  #fileList li .fname { font-weight: 600; word-break: break-all; }
+  #fileList li .fname { font-weight: 400; word-break: break-all; }
   #fileList li .fdate { color: var(--ink-soft); font-size: 11px; margin-top: 3px; }
   .side-empty { padding: 20px 14px; color: var(--ink-soft); font-size: 13px; text-align: center; }
 
@@ -124,7 +124,7 @@
     flex: 1;
     overflow-y: auto;
     padding: 24px 28px;
-    background: var(--paper);
+    background: var(--panel);
     display: none;
     line-height: 1.75;
     font-size: 14.5px;
@@ -219,7 +219,7 @@
 
 <header>
   <button class="btn" id="sideToggle" aria-label="파일 목록 열기">☰</button>
-  <h1>Markdown editor</h1>
+  <h1>📄 마크다운 편집기</h1>
   <span id="fileTitle">파일을 선택하세요</span>
   <span id="dirtyDot" title="저장되지 않은 변경사항">●</span>
   <button class="btn" id="previewBtn" disabled>미리보기</button>
@@ -311,7 +311,7 @@ function logout() {
   if (dirty && !confirm("저장하지 않은 변경사항이 있습니다. 로그아웃할까요?")) return;
   if (accessToken) google.accounts.oauth2.revoke(accessToken, () => {});
   accessToken = null; currentFile = null; setDirty(false);
-  allFiles = []; folderStack = [{ id: "root", name: "내 드라이브" }]; renderList([], true);
+  allFiles = []; folderCache.clear(); folderStack = [{ id: "root", name: "내 드라이브" }]; renderList([], true);
   editor.value = ""; editor.style.display = "none";
   $("preview").style.display = "none";
   $("loginScreen").style.display = "flex";
@@ -341,24 +341,35 @@ async function api(url, opts = {}) {
 
 /* ── 폴더 탐색 ──────────────────────────── */
 let folderStack = [{ id: "root", name: "내 드라이브" }];
+const folderCache = new Map();   // 폴더ID → 목록 (세션 동안만 유지)
 
 function curFolder() { return folderStack[folderStack.length - 1]; }
 
+function showFolder(items) {
+  allFiles = items;
+  renderList(items, true);
+  const nFiles = items.filter(f => f.mimeType !== "application/vnd.google-apps.folder").length;
+  $("statusMsg").textContent = `${curFolder().name} — md 파일 ${nFiles}개`;
+}
+
 async function loadFolder() {
-  $("statusMsg").textContent = "폴더 여는 중…";
   $("searchBox").value = "";
+  const fid = curFolder().id;
+  const cached = folderCache.get(fid);
+  if (cached) showFolder(cached);                 // 캐시 즉시 표시
+  else $("statusMsg").textContent = "폴더 여는 중…";
   try {
     const q = encodeURIComponent(
-      `'${curFolder().id}' in parents and trashed = false and ` +
+      `'${fid}' in parents and trashed = false and ` +
       `(mimeType = 'application/vnd.google-apps.folder' or name contains '.md')`);
     const fields = encodeURIComponent("files(id,name,mimeType,modifiedTime)");
     const r = await api(`${DRIVE}/files?q=${q}&fields=${fields}&pageSize=300&orderBy=folder,name&key=${API_KEY}`);
     const data = await r.json();
-    allFiles = (data.files || []).filter(f =>
+    const items = (data.files || []).filter(f =>
       f.mimeType === "application/vnd.google-apps.folder" || f.name.toLowerCase().endsWith(".md"));
-    renderList(allFiles, true);
-    const nFiles = allFiles.filter(f => f.mimeType !== "application/vnd.google-apps.folder").length;
-    $("statusMsg").textContent = `${curFolder().name} — md 파일 ${nFiles}개`;
+    folderCache.set(fid, items);
+    // 백그라운드 갱신: 아직 같은 폴더를 보고 있고, 내용이 달라졌을 때만 다시 그림
+    if (curFolder().id === fid && JSON.stringify(items) !== JSON.stringify(cached)) showFolder(items);
   } catch (e) {
     if (e.message !== "token expired") { console.error(e); toast("폴더를 열지 못했습니다", "err"); }
   }
