@@ -96,10 +96,10 @@
   #searchBox:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   #fileList { flex: 1; overflow-y: auto; list-style: none; }
   #fileList li {
-    padding: 10px 14px;
-    border-bottom: 1px solid var(--line);
+    padding: 9px 14px;
     cursor: pointer;
     font-size: 13px;
+    border-radius: 6px;
   }
   #fileList li:hover { background: var(--paper); }
   #fileList li.active { background: var(--accent-soft); border-left: 3px solid var(--accent); padding-left: 11px; }
@@ -130,7 +130,8 @@
     font-size: 14.5px;
   }
   #preview h1, #preview h2, #preview h3 { margin: 1.2em 0 0.5em; line-height: 1.35; }
-  #preview h1 { font-size: 1.5em; border-bottom: 2px solid var(--line); padding-bottom: 6px; }
+  #preview h1 { font-size: 1.5em; }
+  #preview hr { border: none; border-top: 1px solid var(--line); margin: 1.2em 0; }
   #preview h2 { font-size: 1.25em; }
   #preview p, #preview ul, #preview ol { margin-bottom: 0.8em; }
   #preview ul, #preview ol { padding-left: 1.5em; }
@@ -302,7 +303,9 @@ function onToken(resp) {
   $("newBtn").disabled = false;
   $("statusMsg").textContent = "로그인됨";
   folderStack = [{ id: "root", name: "내 드라이브" }];
-  loadFolder();
+  buildIndex().then(loadFolder).catch(e => {
+    if (e.message !== "token expired") { console.error(e); toast("드라이브 목록을 읽지 못했습니다", "err"); }
+  });
 }
 
 function login() { tokenClient.requestAccessToken({ prompt: "" }); }
@@ -311,7 +314,9 @@ function logout() {
   if (dirty && !confirm("저장하지 않은 변경사항이 있습니다. 로그아웃할까요?")) return;
   if (accessToken) google.accounts.oauth2.revoke(accessToken, () => {});
   accessToken = null; currentFile = null; setDirty(false);
-  allFiles = []; folderCache.clear(); folderStack = [{ id: "root", name: "내 드라이브" }]; renderList([], true);
+  allFiles = []; folderStack = [{ id: "root", name: "내 드라이브" }];
+  idx.folders.clear(); idx.childFolders.clear(); idx.childFiles.clear(); idx.hasMd.clear(); idx.allMd = [];
+  renderList([], true);
   editor.value = ""; editor.style.display = "none";
   $("preview").style.display = "none";
   $("loginScreen").style.display = "flex";
@@ -339,56 +344,90 @@ async function api(url, opts = {}) {
   return r;
 }
 
-/* ── 폴더 탐색 ──────────────────────────── */
+/* ── 드라이브 인덱스 (전체 폴더 + md 목록을 한 번에) ── */
 let folderStack = [{ id: "root", name: "내 드라이브" }];
-const folderCache = new Map();   // 폴더ID → 목록 (세션 동안만 유지)
+let rootId = "root";
+const idx = { folders: new Map(), childFolders: new Map(), childFiles: new Map(), hasMd: new Set(), allMd: [] };
 
 function curFolder() { return folderStack[folderStack.length - 1]; }
 
-function showFolder(items) {
+async function fetchAllPages(q, fields) {
+  let out = [], pageToken = "";
+  do {
+    const url = `${DRIVE}/files?q=${encodeURIComponent(q)}&fields=${encodeURIComponent("nextPageToken," + fields)}` +
+      `&pageSize=1000${pageToken ? "&pageToken=" + pageToken : ""}&key=${API_KEY}`;
+    const data = await (await api(url)).json();
+    out = out.concat(data.files || []);
+    pageToken = data.nextPageToken || "";
+  } while (pageToken);
+  return out;
+}
+
+async function buildIndex() {
+  $("statusMsg").textContent = "드라이브 목록 읽는 중…";
+  // 내 드라이브 루트의 실제 ID
+  rootId = (await (await api(`${DRIVE}/files/root?fields=id&key=${API_KEY}`)).json()).id;
+
+  const [folders, files] = await Promise.all([
+    fetchAllPages("mimeType = 'application/vnd.google-apps.folder' and trashed = false and 'me' in owners",
+                  "files(id,name,parents)"),
+    fetchAllPages("name contains '.md' and trashed = false",
+                  "files(id,name,parents,modifiedTime)"),
+  ]);
+  const mds = files.filter(f => f.name.toLowerCase().endsWith(".md"));
+
+  idx.folders.clear(); idx.childFolders.clear(); idx.childFiles.clear(); idx.hasMd.clear();
+  idx.allMd = mds;
+
+  for (const fo of folders) idx.folders.set(fo.id, fo);
+  const parentOf = id => {
+    const f = idx.folders.get(id);
+    return f && f.parents ? f.parents[0] : null;
+  };
+  const addChild = (map, pid, item) => {
+    if (!map.has(pid)) map.set(pid, []);
+    map.get(pid).push(item);
+  };
+  for (const fo of folders) addChild(idx.childFolders, (fo.parents || [rootId])[0], fo);
+  for (const md of mds) {
+    addChild(idx.childFiles, (md.parents || [rootId])[0], md);
+    // md가 든 폴더와 그 모든 조상 폴더 표시
+    let p = (md.parents || [])[0];
+    let guard = 0;
+    while (p && p !== rootId && guard++ < 50) {
+      if (idx.hasMd.has(p)) break;
+      idx.hasMd.add(p);
+      p = parentOf(p);
+    }
+  }
+}
+
+function folderItems(fid) {
+  const realId = fid === "root" ? rootId : fid;
+  const subs = (idx.childFolders.get(realId) || [])
+    .filter(fo => idx.hasMd.has(fo.id))                     // md 없는 폴더는 숨김
+    .sort((a, b) => a.name.localeCompare(b.name, "ko"));
+  const files = (idx.childFiles.get(realId) || [])
+    .slice().sort((a, b) => a.name.localeCompare(b.name, "ko"));
+  return [...subs.map(f => ({ ...f, mimeType: "application/vnd.google-apps.folder" })), ...files];
+}
+
+function loadFolder() {
+  $("searchBox").value = "";
+  const items = folderItems(curFolder().id);
   allFiles = items;
   renderList(items, true);
   const nFiles = items.filter(f => f.mimeType !== "application/vnd.google-apps.folder").length;
   $("statusMsg").textContent = `${curFolder().name} — md 파일 ${nFiles}개`;
 }
 
-async function loadFolder() {
-  $("searchBox").value = "";
-  const fid = curFolder().id;
-  const cached = folderCache.get(fid);
-  if (cached) showFolder(cached);                 // 캐시 즉시 표시
-  else $("statusMsg").textContent = "폴더 여는 중…";
-  try {
-    const q = encodeURIComponent(
-      `'${fid}' in parents and trashed = false and ` +
-      `(mimeType = 'application/vnd.google-apps.folder' or name contains '.md')`);
-    const fields = encodeURIComponent("files(id,name,mimeType,modifiedTime)");
-    const r = await api(`${DRIVE}/files?q=${q}&fields=${fields}&pageSize=300&orderBy=folder,name&key=${API_KEY}`);
-    const data = await r.json();
-    const items = (data.files || []).filter(f =>
-      f.mimeType === "application/vnd.google-apps.folder" || f.name.toLowerCase().endsWith(".md"));
-    folderCache.set(fid, items);
-    // 백그라운드 갱신: 아직 같은 폴더를 보고 있고, 내용이 달라졌을 때만 다시 그림
-    if (curFolder().id === fid && JSON.stringify(items) !== JSON.stringify(cached)) showFolder(items);
-  } catch (e) {
-    if (e.message !== "token expired") { console.error(e); toast("폴더를 열지 못했습니다", "err"); }
-  }
-}
-
-async function searchAll(kw) {
-  $("statusMsg").textContent = "검색 중…";
-  try {
-    const safe = kw.replace(/['\\]/g, "");
-    const q = encodeURIComponent(`name contains '${safe}' and name contains '.md' and trashed = false`);
-    const fields = encodeURIComponent("files(id,name,mimeType,modifiedTime)");
-    const r = await api(`${DRIVE}/files?q=${q}&fields=${fields}&pageSize=100&orderBy=modifiedTime desc&key=${API_KEY}`);
-    const data = await r.json();
-    const found = (data.files || []).filter(f => f.name.toLowerCase().endsWith(".md"));
-    renderList(found, false);
-    $("statusMsg").textContent = `전체 검색: ${found.length}개`;
-  } catch (e) {
-    if (e.message !== "token expired") { console.error(e); toast("검색에 실패했습니다", "err"); }
-  }
+function searchAll(kw) {
+  const low = kw.toLowerCase();
+  const found = idx.allMd
+    .filter(f => f.name.toLowerCase().includes(low))
+    .sort((a, b) => (b.modifiedTime || "").localeCompare(a.modifiedTime || ""));
+  renderList(found, false);
+  $("statusMsg").textContent = `전체 검색: ${found.length}개`;
 }
 
 function renderList(items, folderMode) {
@@ -440,11 +479,11 @@ async function openFile(f) {
     $("saveBtn").disabled = false;
     $("previewBtn").disabled = false;
     $("statusMsg").textContent = f.name + " 열림";
-    updateCount(); refreshPreview();
+    updateCount();
     document.querySelectorAll("#fileList li").forEach(li =>
       li.classList.toggle("active", li.dataset.id === f.id));
     setSidebar(false);
-    if (editor.style.display !== "none") editor.focus();
+    setMode("preview");
   } catch (e) {
     if (e.message !== "token expired") { console.error(e); toast("파일을 열지 못했습니다", "err"); }
   }
@@ -474,7 +513,7 @@ async function newFile() {
   let name = prompt(`새 파일 이름 (현재 폴더: ${curFolder().name})`);
   if (!name) return;
   if (!name.toLowerCase().endsWith(".md")) name += ".md";
-  const meta = { name, mimeType: "text/markdown", parents: [curFolder().id] };
+  const meta = { name, mimeType: "text/markdown", parents: [curFolder().id === "root" ? rootId : curFolder().id] };
   const boundary = "-------md" + Date.now();
   const body =
     `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` +
@@ -489,7 +528,7 @@ async function newFile() {
       body,
     });
     toast("새 파일을 만들었습니다", "ok");
-    await loadFolder();
+    await buildIndex(); loadFolder();
   } catch (e) {
     if (e.message !== "token expired") { console.error(e); toast("파일 생성 실패", "err"); }
   }
@@ -510,21 +549,22 @@ function refreshPreview() {
 
 editor.addEventListener("input", () => { setDirty(true); updateCount(); refreshPreview(); });
 
-$("previewBtn").onclick = () => {
+function setMode(mode) {          // "edit" | "preview"
   const p = $("preview");
-  const showingPreview = p.style.display === "block";
-  if (showingPreview) {        // 미리보기 → 편집 모드
-    p.style.display = "none";
-    editor.style.display = "block";
-    $("previewBtn").textContent = "미리보기";
-    editor.focus();
-  } else {                     // 편집 → 미리보기 모드
+  if (mode === "preview") {
     editor.style.display = "none";
     p.style.display = "block";
     $("previewBtn").textContent = "편집";
     refreshPreview();
+  } else {
+    p.style.display = "none";
+    editor.style.display = "block";
+    $("previewBtn").textContent = "미리보기";
+    editor.focus();
   }
-};
+}
+$("previewBtn").onclick = () =>
+  setMode($("preview").style.display === "block" ? "edit" : "preview");
 
 $("saveBtn").onclick = saveFile;
 $("newBtn").onclick = newFile;
@@ -544,7 +584,7 @@ $("searchBox").addEventListener("input", e => {
   searchTimer = setTimeout(() => {
     if (!kw) loadFolder();
     else searchAll(kw);
-  }, 400);
+  }, 150);
 });
 
 document.addEventListener("keydown", e => {
