@@ -6,6 +6,8 @@
 <title>📄 마크다운 편집기</title>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.0/marked.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
 <style>
   :root {
     --ink: #111418;
@@ -166,6 +168,8 @@
   #preview blockquote { border-left: 4px solid var(--accent); padding-left: 12px; color: var(--ink-soft); margin-bottom: 0.8em; }
   #preview table { border-collapse: collapse; margin-bottom: 0.8em; }
   #preview th, #preview td { border: 1px solid var(--line); padding: 6px 10px; }
+  #preview .katex { font-size: 1.05em; }
+  #preview .katex-display { margin: 0.8em 0; overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
 
   /* ── 로그인 화면 ─────────────────────── */
   #loginScreen {
@@ -675,10 +679,42 @@ function setDirty(v) {
 function updateCount() {
   $("charCount").textContent = editor.value.length.toLocaleString() + "자";
 }
+/* 수식을 먼저 추출 → 마크다운 파싱 → 수식 복원(KaTeX 렌더) */
+function renderWithMath(src) {
+  if (!window.marked) return "";
+  const store = [];
+  // $$...$$ (블록) 먼저, 그다음 $...$ (인라인)
+  let txt = src.replace(/\$\$([\s\S]+?)\$\$/g, (m, tex) => {
+    store.push({ tex: tex.trim(), display: true });
+    return `@@MATH${store.length - 1}@@`;
+  });
+  txt = txt.replace(/\$([^\$\n]+?)\$/g, (m, tex) => {
+    store.push({ tex: tex.trim(), display: false });
+    return `@@MATH${store.length - 1}@@`;
+  });
+
+  let html = marked.parse(txt, { breaks: true, gfm: true });
+
+  html = html.replace(/@@MATH(\d+)@@/g, (m, i) => {
+    const item = store[+i];
+    if (!item || !window.katex) return m;
+    try {
+      return katex.renderToString(item.tex, {
+        displayMode: item.display,
+        throwOnError: false,
+        output: "html"
+      });
+    } catch (e) {
+      return `<code style="color:#c0392b">${item.tex}</code>`;
+    }
+  });
+  return html;
+}
+
 function refreshPreview() {
   const p = $("preview");
   if (p.style.display !== "none" && window.marked)
-    p.innerHTML = marked.parse(editor.value, { breaks: true, gfm: true });
+    p.innerHTML = renderWithMath(editor.value);
 }
 
 editor.addEventListener("input", () => { setDirty(true); updateCount(); refreshPreview(); });
