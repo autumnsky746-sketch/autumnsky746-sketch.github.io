@@ -109,7 +109,7 @@
 
   .workspace { flex: 1; display: flex; min-width: 0; }
   #docArea { flex: 1; display: none; flex-direction: column; min-width: 0; background: var(--panel); }
-  #docTitle { font-size: 24px; font-weight: 700; padding: 20px 24px 2px; letter-spacing: -0.3px; }
+  #docTitle { font-size: 27px; font-weight: 700; padding: 20px 24px 2px; letter-spacing: -0.3px; }
   #docTitle:empty { display: none; }
   #panes { flex: 1; display: flex; min-height: 0; min-width: 0; }
   #preview { touch-action: manipulation; }
@@ -119,8 +119,8 @@
     resize: none;
     padding: 20px;
     font-family: var(--mono);
-    font-size: 14px;
-    line-height: 1.7;
+    font-size: 18px;
+    line-height: 1.75;
     color: var(--ink);
     background: var(--panel);
   }
@@ -131,8 +131,8 @@
     padding: 24px 28px;
     background: var(--panel);
     display: none;
-    line-height: 1.75;
-    font-size: 14.5px;
+    line-height: 1.8;
+    font-size: 18px;
   }
   #preview h1, #preview h2, #preview h3 { margin: 1.2em 0 0.5em; line-height: 1.35; }
   #preview h1 { font-size: 1.5em; }
@@ -172,6 +172,23 @@
     justify-content: space-between;
     flex-shrink: 0;
   }
+  #fab {
+    position: fixed;
+    right: 18px;
+    bottom: 58px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 999px;
+    padding: 13px 20px;
+    font-size: 16px;
+    font-weight: 600;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.28);
+    display: none;
+    cursor: pointer;
+    z-index: 30;
+  }
+  #fab:active { transform: scale(0.96); }
   #toast {
     position: fixed;
     bottom: 48px;
@@ -266,6 +283,8 @@
   <span id="statusMsg">로그아웃 상태</span>
   <span id="charCount"></span>
 </footer>
+
+<button id="fab" aria-label="미리보기로 전환">✓ 완료</button>
 
 <div id="toast" role="status"></div>
 
@@ -579,6 +598,8 @@ function setMode(mode) {          // "edit" | "preview"
     $("previewBtn").textContent = "미리보기";
     editor.focus();
   }
+  // 편집 중 + 파일 열림 상태에서만 완료 버튼 표시
+  $("fab").style.display = (mode === "edit" && currentFile) ? "block" : "none";
 }
 
 $("previewBtn").onclick = () =>
@@ -632,8 +653,15 @@ $("searchBox").addEventListener("input", e => {
   }, 150);
 });
 
+$("fab").onclick = () => setMode("preview");
+
 document.addEventListener("keydown", e => {
   if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); saveFile(); }
+  if ((e.ctrlKey || e.metaKey) && e.key === "e") {
+    e.preventDefault();
+    if (currentFile) setMode($("preview").style.display === "block" ? "edit" : "preview");
+  }
+  if (e.key === "Escape" && currentFile && editor.style.display !== "none") setMode("preview");
 });
 
 window.addEventListener("beforeunload", e => {
