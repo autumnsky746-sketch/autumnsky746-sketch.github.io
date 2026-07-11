@@ -88,7 +88,7 @@
     padding: 7px 10px;
     border: 1px solid var(--line);
     border-radius: 6px;
-    font-size: 13px;
+    font-size: 15px;
     background: var(--paper);
     color: var(--ink);
     min-width: 0;
@@ -98,13 +98,13 @@
   #fileList li {
     padding: 9px 14px;
     cursor: pointer;
-    font-size: 13px;
+    font-size: 16px;
     border-radius: 6px;
   }
   #fileList li:hover { background: var(--paper); }
   #fileList li.active { background: var(--accent-soft); border-left: 3px solid var(--accent); padding-left: 11px; }
   #fileList li .fname { font-weight: 400; word-break: break-all; }
-  #fileList li .fdate { color: var(--ink-soft); font-size: 11px; margin-top: 3px; }
+  #fileList li .fdate { color: var(--ink-soft); font-size: 12px; margin-top: 3px; }
   .side-empty { padding: 20px 14px; color: var(--ink-soft); font-size: 13px; text-align: center; }
 
   .workspace { flex: 1; display: flex; min-width: 0; }
@@ -119,7 +119,7 @@
     resize: none;
     padding: 20px;
     font-family: var(--mono);
-    font-size: 18px;
+    font-size: 16px;
     line-height: 1.75;
     color: var(--ink);
     background: var(--panel);
@@ -132,7 +132,7 @@
     background: var(--panel);
     display: none;
     line-height: 1.8;
-    font-size: 18px;
+    font-size: 16px;
   }
   #preview h1, #preview h2, #preview h3 { margin: 1.2em 0 0.5em; line-height: 1.35; }
   #preview h1 { font-size: 1.5em; }
@@ -256,6 +256,7 @@
   <aside id="sidebar">
     <div class="side-head">
       <input id="searchBox" type="text" placeholder="파일 이름 검색" disabled>
+      <button class="btn" id="pinBtn" title="현재 폴더를 시작 폴더로 고정/해제" disabled>📌</button>
       <button class="btn" id="newBtn" title="새 md 파일 만들기" disabled>＋</button>
     </div>
     <ul id="fileList"></ul>
@@ -333,8 +334,13 @@ function onToken(resp) {
   $("searchBox").disabled = false;
   $("newBtn").disabled = false;
   $("statusMsg").textContent = "로그인됨";
-  folderStack = [{ id: "root", name: "내 드라이브" }];
-  buildIndex().then(loadFolder).catch(e => {
+  buildIndex().then(() => {
+    folderStack = (vaultRoot && idx.folders.has(vaultRoot.id))
+      ? [vaultRoot]
+      : [{ id: "root", name: "내 드라이브" }];
+    $("pinBtn").disabled = false;
+    loadFolder();
+  }).catch(e => {
     if (e.message !== "token expired") { console.error(e); toast("드라이브 목록을 읽지 못했습니다", "err"); }
   });
 }
@@ -355,7 +361,7 @@ function logout() {
   $("loginScreen").style.display = "flex";
   $("authBtn").textContent = "로그인";
   $("fileTitle").textContent = "파일을 선택하세요";
-  $("searchBox").disabled = true; $("newBtn").disabled = true;
+  $("searchBox").disabled = true; $("newBtn").disabled = true; $("pinBtn").disabled = true;
   $("saveBtn").disabled = true; $("previewBtn").disabled = true; $("delBtn").disabled = true;
   $("sideEmpty").style.display = "block";
   $("statusMsg").textContent = "로그아웃 상태";
@@ -379,6 +385,8 @@ async function api(url, opts = {}) {
 
 /* ── 드라이브 인덱스 (전체 폴더 + md 목록을 한 번에) ── */
 let folderStack = [{ id: "root", name: "내 드라이브" }];
+let vaultRoot = null;             // {id, name} — 고정된 시작 폴더
+try { vaultRoot = JSON.parse(localStorage.getItem("vaultRoot") || "null"); } catch (e) {}
 let rootId = "root";
 const idx = { folders: new Map(), childFolders: new Map(), childFiles: new Map(), hasMd: new Set(), allMd: [] };
 
@@ -454,9 +462,19 @@ function loadFolder() {
   $("statusMsg").textContent = `${curFolder().name} — md 파일 ${nFiles}개`;
 }
 
+function scopeSet() {           // 시작 폴더 하위의 폴더 ID 집합 (내 드라이브 시작이면 null = 전체)
+  if (folderStack[0].id === "root") return null;
+  const set = new Set([folderStack[0].id]);
+  const walk = id => (idx.childFolders.get(id) || []).forEach(f => { set.add(f.id); walk(f.id); });
+  walk(folderStack[0].id);
+  return set;
+}
+
 function searchAll(kw) {
   const low = kw.toLowerCase();
+  const scope = scopeSet();
   const found = idx.allMd
+    .filter(f => !scope || scope.has((f.parents || [])[0]))
     .filter(f => f.name.toLowerCase().includes(low))
     .sort((a, b) => (b.modifiedTime || "").localeCompare(a.modifiedTime || ""));
   renderList(found, false);
@@ -630,6 +648,24 @@ async function deleteFile() {
     $("delBtn").disabled = !currentFile;
   }
 }
+
+$("pinBtn").onclick = () => {
+  const cf = curFolder();
+  if (vaultRoot && vaultRoot.id === cf.id) {          // 해제
+    vaultRoot = null;
+    localStorage.removeItem("vaultRoot");
+    folderStack = [{ id: "root", name: "내 드라이브" }];
+    loadFolder();
+    toast("고정 해제. 내 드라이브 전체를 표시합니다.", "ok");
+  } else {                                            // 현재 폴더를 시작 폴더로
+    if (cf.id === "root") { toast("하위 폴더에 들어간 뒤 고정하세요.", "err"); return; }
+    vaultRoot = { id: cf.id, name: cf.name };
+    localStorage.setItem("vaultRoot", JSON.stringify(vaultRoot));
+    folderStack = [vaultRoot];
+    loadFolder();
+    toast(`"${cf.name}"을(를) 시작 폴더로 고정했습니다.`, "ok");
+  }
+};
 
 $("delBtn").onclick = deleteFile;
 $("saveBtn").onclick = saveFile;
