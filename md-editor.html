@@ -98,7 +98,7 @@
   #fileList li {
     padding: 9px 14px;
     cursor: pointer;
-    font-size: 16px;
+    font-size: 15px;
     border-radius: 6px;
   }
   #fileList li:hover { background: var(--paper); }
@@ -112,6 +112,26 @@
   #docTitle { font-size: 27px; font-weight: 700; padding: 20px 24px 2px; letter-spacing: -0.3px; }
   #docTitle:empty { display: none; }
   #panes { flex: 1; display: flex; min-height: 0; min-width: 0; }
+  #docArea { position: relative; }
+  #spinner {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255,255,255,0.65);
+    z-index: 20;
+  }
+  #spinner.show { display: flex; }
+  #spinner .ring {
+    width: 42px;
+    height: 42px;
+    border: 4px solid var(--line);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
   #preview { touch-action: manipulation; }
   #editor {
     flex: 1;
@@ -119,7 +139,7 @@
     resize: none;
     padding: 20px;
     font-family: var(--mono);
-    font-size: 16px;
+    font-size: 15px;
     line-height: 1.75;
     color: var(--ink);
     background: var(--panel);
@@ -132,7 +152,7 @@
     background: var(--panel);
     display: none;
     line-height: 1.8;
-    font-size: 16px;
+    font-size: 15px;
   }
   #preview h1, #preview h2, #preview h3 { margin: 1.2em 0 0.5em; line-height: 1.35; }
   #preview h1 { font-size: 1.5em; }
@@ -256,7 +276,6 @@
   <aside id="sidebar">
     <div class="side-head">
       <input id="searchBox" type="text" placeholder="파일 이름 검색" disabled>
-      <button class="btn" id="pinBtn" title="현재 폴더를 시작 폴더로 고정/해제" disabled>📌</button>
       <button class="btn" id="newBtn" title="새 md 파일 만들기" disabled>＋</button>
     </div>
     <ul id="fileList"></ul>
@@ -272,6 +291,7 @@
     </div>
     <div id="docArea">
       <div id="docTitle"></div>
+      <div id="spinner"><div class="ring"></div></div>
       <div id="panes">
         <textarea id="editor" spellcheck="false" placeholder="파일을 선택하면 여기서 편집합니다"></textarea>
         <div id="preview"></div>
@@ -308,6 +328,7 @@ let dirty = false;
 let allFiles = [];
 
 const $ = id => document.getElementById(id);
+const showSpinner = on => $("spinner").classList.toggle("show", on);
 const editor = $("editor");
 
 /* ── 초기화 ─────────────────────────────── */
@@ -334,15 +355,11 @@ function onToken(resp) {
   $("searchBox").disabled = false;
   $("newBtn").disabled = false;
   $("statusMsg").textContent = "로그인됨";
-  buildIndex().then(() => {
-    folderStack = (vaultRoot && idx.folders.has(vaultRoot.id))
-      ? [vaultRoot]
-      : [{ id: "root", name: "내 드라이브" }];
-    $("pinBtn").disabled = false;
-    loadFolder();
-  }).catch(e => {
+  folderStack = [{ id: "root", name: "내 드라이브" }];
+  showSpinner(true);
+  buildIndex().then(loadFolder).catch(e => {
     if (e.message !== "token expired") { console.error(e); toast("드라이브 목록을 읽지 못했습니다", "err"); }
-  });
+  }).finally(() => showSpinner(false));
 }
 
 function login() { tokenClient.requestAccessToken({ prompt: "" }); }
@@ -361,7 +378,7 @@ function logout() {
   $("loginScreen").style.display = "flex";
   $("authBtn").textContent = "로그인";
   $("fileTitle").textContent = "파일을 선택하세요";
-  $("searchBox").disabled = true; $("newBtn").disabled = true; $("pinBtn").disabled = true;
+  $("searchBox").disabled = true; $("newBtn").disabled = true;
   $("saveBtn").disabled = true; $("previewBtn").disabled = true; $("delBtn").disabled = true;
   $("sideEmpty").style.display = "block";
   $("statusMsg").textContent = "로그아웃 상태";
@@ -385,8 +402,6 @@ async function api(url, opts = {}) {
 
 /* ── 드라이브 인덱스 (전체 폴더 + md 목록을 한 번에) ── */
 let folderStack = [{ id: "root", name: "내 드라이브" }];
-let vaultRoot = null;             // {id, name} — 고정된 시작 폴더
-try { vaultRoot = JSON.parse(localStorage.getItem("vaultRoot") || "null"); } catch (e) {}
 let rootId = "root";
 const idx = { folders: new Map(), childFolders: new Map(), childFiles: new Map(), hasMd: new Set(), allMd: [] };
 
@@ -462,19 +477,9 @@ function loadFolder() {
   $("statusMsg").textContent = `${curFolder().name} — md 파일 ${nFiles}개`;
 }
 
-function scopeSet() {           // 시작 폴더 하위의 폴더 ID 집합 (내 드라이브 시작이면 null = 전체)
-  if (folderStack[0].id === "root") return null;
-  const set = new Set([folderStack[0].id]);
-  const walk = id => (idx.childFolders.get(id) || []).forEach(f => { set.add(f.id); walk(f.id); });
-  walk(folderStack[0].id);
-  return set;
-}
-
 function searchAll(kw) {
   const low = kw.toLowerCase();
-  const scope = scopeSet();
   const found = idx.allMd
-    .filter(f => !scope || scope.has((f.parents || [])[0]))
     .filter(f => f.name.toLowerCase().includes(low))
     .sort((a, b) => (b.modifiedTime || "").localeCompare(a.modifiedTime || ""));
   renderList(found, false);
@@ -521,6 +526,7 @@ function renderList(items, folderMode) {
 async function openFile(f) {
   if (dirty && !confirm("저장하지 않은 변경사항이 있습니다. 다른 파일을 열까요?")) return;
   $("statusMsg").textContent = "파일 여는 중…";
+  showSpinner(true);
   try {
     const r = await api(`${DRIVE}/files/${f.id}?alt=media`);
     editor.value = await r.text();
@@ -539,6 +545,8 @@ async function openFile(f) {
     setMode("preview");
   } catch (e) {
     if (e.message !== "token expired") { console.error(e); toast("파일을 열지 못했습니다", "err"); }
+  } finally {
+    showSpinner(false);
   }
 }
 
@@ -581,7 +589,7 @@ async function newFile() {
       body,
     });
     toast("새 파일을 만들었습니다", "ok");
-    await buildIndex(); loadFolder();
+    showSpinner(true); try { await buildIndex(); loadFolder(); } finally { showSpinner(false); }
   } catch (e) {
     if (e.message !== "token expired") { console.error(e); toast("파일 생성 실패", "err"); }
   }
@@ -642,30 +650,12 @@ async function deleteFile() {
     $("fileTitle").textContent = "파일을 선택하세요";
     $("saveBtn").disabled = true; $("previewBtn").disabled = true;
     setMode("edit");
-    await buildIndex(); loadFolder();
+    showSpinner(true); try { await buildIndex(); loadFolder(); } finally { showSpinner(false); }
   } catch (e) {
     if (e.message !== "token expired") { console.error(e); toast("삭제에 실패했습니다", "err"); }
     $("delBtn").disabled = !currentFile;
   }
 }
-
-$("pinBtn").onclick = () => {
-  const cf = curFolder();
-  if (vaultRoot && vaultRoot.id === cf.id) {          // 해제
-    vaultRoot = null;
-    localStorage.removeItem("vaultRoot");
-    folderStack = [{ id: "root", name: "내 드라이브" }];
-    loadFolder();
-    toast("고정 해제. 내 드라이브 전체를 표시합니다.", "ok");
-  } else {                                            // 현재 폴더를 시작 폴더로
-    if (cf.id === "root") { toast("하위 폴더에 들어간 뒤 고정하세요.", "err"); return; }
-    vaultRoot = { id: cf.id, name: cf.name };
-    localStorage.setItem("vaultRoot", JSON.stringify(vaultRoot));
-    folderStack = [vaultRoot];
-    loadFolder();
-    toast(`"${cf.name}"을(를) 시작 폴더로 고정했습니다.`, "ok");
-  }
-};
 
 $("delBtn").onclick = deleteFile;
 $("saveBtn").onclick = saveFile;
